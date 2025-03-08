@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cube.io</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Player cube
+        const playerGeometry = new THREE.BoxGeometry(1, 1, 1);
+        const playerMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 }); // Green
+        const player = new THREE.Mesh(playerGeometry, playerMaterial);
+        let playerSize = 1;
+        player.scale.set(playerSize, playerSize, playerSize);
+        scene.add(player);
+
+        // Create grid texture for the floor
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const context = canvas.getContext('2d');
+        context.fillStyle = '#cccccc'; // Light gray background
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw grid lines with gridSize = 1
+        context.strokeStyle = '#ffffff'; // White lines
+        context.lineWidth = 2;
+        const gridSize = 1;
+        for (let i = 0; i <= gridSize; i++) {
+            const pos = i * (canvas.width / gridSize);
+            context.beginPath();
+            context.moveTo(pos, 0);
+            context.lineTo(pos, canvas.height);
+            context.stroke();
+            context.beginPath();
+            context.moveTo(0, pos);
+            context.lineTo(canvas.width, pos);
+            context.stroke();
+        }
+
+        const gridTexture = new THREE.CanvasTexture(canvas);
+        gridTexture.repeat.set(500 / 16, 500 / 16);
+        gridTexture.wrapS = gridTexture.wrapT = THREE.RepeatWrapping;
+
+        // Add floor with grid texture
+        const floorGeometry = new THREE.PlaneGeometry(500, 500);
+        const floorMaterial = new THREE.MeshBasicMaterial({ map: gridTexture });
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = -0.5;
+        scene.add(floor);
+
+        // Food cubes array
+        const food = [];
+        const targetFoodCount = 250;
+
+        // Enemies array
+        const enemies = [];
+        const targetEnemyCount = 10;
+
+        // Function to create a food cube with random properties
+        function createRandomFood() {
+            const size = Math.random() * 2.5 + 0.5; // Size: 0.5 to 3
+            const color = Math.random() * 0xffffff;
+            const x = (Math.random() - 0.5) * 500;
+            const z = (Math.random() - 0.5) * 500;
+            const y = size / 2;
+
+            const geometry = new THREE.BoxGeometry(size, size, size);
+            const material = new THREE.MeshBasicMaterial({ color });
+            const cube = new THREE.Mesh(geometry, material);
+            cube.position.set(x, y, z);
+            scene.add(cube);
+            food.push({ mesh: cube, size });
+        }
+
+        // Function to create an enemy cube with random properties
+        function createRandomEnemy() {
+            const size = Math.random() * 9.5 + 0.5; // Size: 0.5 to 10
+            const color = 0xff0000; // Red for enemies
+            const x = (Math.random() - 0.5) * 500;
+            const z = (Math.random() - 0.5) * 500;
+            const y = size / 2;
+
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            const material = new THREE.MeshBasicMaterial({ color });
+            const cube = new THREE.Mesh(geometry, material);
+            cube.scale.set(size, size, size);
+            cube.position.set(x, y, z);
+            scene.add(cube);
+
+            const direction = Math.random() * Math.PI * 2;
+            const moveTimer = Math.random() * 2000 + 1000;
+            enemies.push({ mesh: cube, size, direction, moveTimer, lastUpdate: 0 });
+        }
+
+        // Function to find a safe spawn position for an object
+        function setSafeSpawn(object, size, entities) {
+            let isSafe = false;
+            let attempts = 0;
+            const maxAttempts = 100;
+            const buffer = 2;
+
+            while (!isSafe && attempts < maxAttempts) {
+                const x = (Math.random() - 0.5) * 500;
+                const z = (Math.random() - 0.5) * 500;
+                const y = size * 0.5;
+
+                object.position.set(x, y, z);
+                const objectBox = new THREE.Box3().setFromObject(object);
+                objectBox.expandByScalar(buffer);
+
+                isSafe = true;
+                for (const entity of entities) {
+                    const entityBox = new THREE.Box3().setFromObject(entity.mesh);
+                    if (objectBox.intersectsBox(entityBox)) {
+                        isSafe = false;
+                        break;
+                    }
+                }
+                attempts++;
+            }
+
+            if (!isSafe) {
+                console.warn("Couldn’t find a safe spawn—spawning anyway.");
+            }
+        }
+
+        // Spawn initial food and enemies
+        for (let i = 0; i < targetFoodCount; i++) {
+            createRandomFood();
+        }
+        for (let i = 0; i < targetEnemyCount; i++) {
+            createRandomEnemy();
+            setSafeSpawn(enemies[i].mesh, enemies[i].size, [...food, ...enemies.slice(0, i)]);
+        }
+        setSafeSpawn(player, playerSize, [...food, ...enemies]);
+
+        // Initial camera position
+        camera.position.set(0, 5, 10);
+        camera.lookAt(player.position);
+
+        // WASD movement controls for player
+        let keys = { w: false, a: false, s: false, d: false };
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'w') keys.w = true;
+            if (event.key === 'a') keys.a = true;
+            if (event.key === 's') keys.s = true;
+            if (event.key === 'd') keys.d = true;
+        });
+        document.addEventListener('keyup', (event) => {
+            if (event.key === 'w') keys.w = false;
+            if (event.key === 'a') keys.a = false;
+            if (event.key === 's') keys.s = false;
+            if (event.key === 'd') keys.d = false;
+        });
+
+        // Movement speed and rotation speed
+        const speed = 0.2;
+        const rotationSpeed = 0.05;
+        const bounds = 250; // Half of 500x500 plane
+
+        // Animation loop
+        function animate(timestamp = 0) {
+            requestAnimationFrame(animate);
+
+            // Player movement
+            let forwardInput = 0;
+            if (keys.w) forwardInput = 1;
+            if (keys.s) forwardInput = -1;
+            const playerAngle = player.rotation.y;
+            const playerForward = new THREE.Vector3(Math.sin(playerAngle), 0, Math.cos(playerAngle)).normalize();
+            if (forwardInput !== 0) {
+                const moveVector = playerForward.clone().multiplyScalar(forwardInput * speed);
+                player.position.add(moveVector);
+            }
+            if (keys.a) player.rotation.y += rotationSpeed;
+            if (keys.d) player.rotation.y -= rotationSpeed;
+
+            // Keep player in bounds
+            player.position.x = Math.max(-bounds + playerSize / 2, Math.min(bounds - playerSize / 2, player.position.x));
+            player.position.z = Math.max(-bounds + playerSize / 2, Math.min(bounds - playerSize / 2, player.position.z));
+
+            // Enemy movement
+            enemies.forEach(enemy => {
+                if (timestamp - enemy.lastUpdate > enemy.moveTimer) {
+                    enemy.direction = Math.random() * Math.PI * 2;
+                    enemy.moveTimer = Math.random() * 4000 + 1000;
+                    enemy.lastUpdate = timestamp;
+                }
+                const enemyForward = new THREE.Vector3(Math.sin(enemy.direction), 0, Math.cos(enemy.direction)).normalize();
+                const enemyMoveVector = enemyForward.clone().multiplyScalar(speed);
+                enemy.mesh.position.add(enemyMoveVector);
+                enemy.mesh.rotation.y = enemy.direction;
+
+                // Keep enemy in bounds
+                enemy.mesh.position.x = Math.max(-bounds + enemy.size / 2, Math.min(bounds - enemy.size / 2, enemy.mesh.position.x));
+                enemy.mesh.position.z = Math.max(-bounds + enemy.size / 2, Math.min(bounds - enemy.size / 2, enemy.mesh.position.z));
+            });
+
+            // Update camera
+            const distanceBehind = Math.min(playerSize * 8, 60);
+            const height = 7 + Math.min(playerSize * 5, 500);
+            const direction = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y)).normalize();
+            const offset = direction.multiplyScalar(-distanceBehind);
+            const desiredPosition = player.position.clone().add(offset);
+            desiredPosition.y = height;
+            camera.position.lerp(desiredPosition, 0.1);
+            camera.lookAt(player.position);
+
+            // Player collisions with food
+            const playerBox = new THREE.Box3().setFromObject(player);
+            for (let i = food.length - 1; i >= 0; i--) {
+                const foodItem = food[i];
+                const foodBox = new THREE.Box3().setFromObject(foodItem.mesh);
+                if (playerBox.intersectsBox(foodBox)) {
+                    if (playerSize > foodItem.size) {
+                        playerSize += foodItem.size / playerSize;
+                        player.scale.set(playerSize, playerSize, playerSize);
+                        player.position.y = playerSize * 0.5;
+                        scene.remove(foodItem.mesh);
+                        food.splice(i, 1);
+                    } else if (playerSize < foodItem.size) {
+                        alert("Game Over! You were absorbed by food.");
+                        startNewGame();
+                    }
+                }
+            }
+
+            // Enemy collisions with food
+            for (let j = enemies.length - 1; j >= 0; j--) {
+                const enemy = enemies[j];
+                const enemyBox = new THREE.Box3().setFromObject(enemy.mesh);
+                for (let i = food.length - 1; i >= 0; i--) {
+                    const foodItem = food[i];
+                    const foodBox = new THREE.Box3().setFromObject(foodItem.mesh);
+                    if (enemyBox.intersectsBox(foodBox)) {
+                        if (enemy.size > foodItem.size) {
+                            enemy.size += foodItem.size / enemy.size;
+                            enemy.mesh.scale.set(enemy.size, enemy.size, enemy.size);
+                            enemy.mesh.position.y = enemy.size * 0.5;
+                            scene.remove(foodItem.mesh);
+                            food.splice(i, 1);
+                        }
+                    }
+                }
+            }
+
+            // Player-enemy collisions
+            for (let j = enemies.length - 1; j >= 0; j--) {
+                const enemy = enemies[j];
+                const enemyBox = new THREE.Box3().setFromObject(enemy.mesh);
+                if (playerBox.intersectsBox(enemyBox)) {
+                    if (playerSize > enemy.size) {
+                        // Player absorbs enemy
+                        playerSize += enemy.size / playerSize;
+                        player.scale.set(playerSize, playerSize, playerSize);
+                        player.position.y = playerSize * 0.5;
+                        scene.remove(enemy.mesh);
+                        enemies.splice(j, 1);
+                    } else if (playerSize < enemy.size) {
+                        // Enemy absorbs player (game over)
+                        alert("Game Over! An enemy absorbed you.");
+                        startNewGame();
+                    }
+                }
+            }
+
+            // Respawn food
+            if (food.length < targetFoodCount && Math.random() < 0.05) {
+                createRandomFood();
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Restart game
+        function startNewGame() {
+            playerSize = 1;
+            player.scale.set(playerSize, playerSize, playerSize);
+            player.position.set(0, 0, 0);
+            player.rotation.y = 0;
+            food.forEach(foodItem => scene.remove(foodItem.mesh));
+            food.length = 0;
+            enemies.forEach(enemy => scene.remove(enemy.mesh));
+            enemies.length = 0;
+            for (let i = 0; i < targetFoodCount; i++) {
+                createRandomFood();
+            }
+            for (let i = 0; i < targetEnemyCount; i++) {
+                createRandomEnemy();
+                setSafeSpawn(enemies[i].mesh, enemies[i].size, [...food, ...enemies.slice(0, i)]);
+            }
+            setSafeSpawn(player, playerSize, [...food, ...enemies]);
+            keys = { w: false, a: false, s: false, d: false };
+        }
+
+        // Start the game
+        animate();
+    </script>
+</body>
+</html>
