@@ -3,23 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Collider</title>
+    <title>Three.js Plane with Dynamic Size and All Planes</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <style>
         body { margin: 0; overflow: hidden; }
         canvas { display: block; }
-		
-		 #homeButton {
+        #homeButton {
             position: absolute;
             top: 10px;
             left: 10px;
             padding: 10px 20px;
-		}
+            text-decoration: none;
+            color: #fff;
+        }
     </style>
 </head>
 <body>
-
-	<a href="index.html" id="homeButton">Home</a>
+    <a href="index.html" id="homeButton">←</a>
 
     <script>
         // Scene setup
@@ -29,239 +29,323 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
-        // Create a plane
-        const geometry = new THREE.PlaneGeometry(100, 100);
-        const material = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-        const plane = new THREE.Mesh(geometry, material);
-        scene.add(plane);
-        plane.rotation.x = -Math.PI / 2;
-
-        // Camera position for top-down view
-        camera.position.set(0, 80, 0);
+        // Camera position
+        const cameraHeight = 80;
+        camera.position.set(0, cameraHeight, 0);
         camera.lookAt(0, 0, 0);
+
+        // Calculate dynamic plane size based on camera FOV and distance
+        function calculatePlaneSize() {
+            const vFOV = THREE.MathUtils.degToRad(camera.fov);
+            const planeHeight = 2 * Math.tan(vFOV / 2) * cameraHeight;
+            const planeWidth = planeHeight * camera.aspect;
+            return { width: planeWidth, height: planeHeight };
+        }
+
+        // Create and update background plane
+        let planeSize = calculatePlaneSize();
+        const geometry = new THREE.PlaneGeometry(planeSize.width, planeSize.height);
+        const material = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+        const backgroundPlane = new THREE.Mesh(geometry, material);
+        scene.add(backgroundPlane);
+        backgroundPlane.rotation.x = -Math.PI / 2;
 
         // Raycaster and mouse setup
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
-        const cubes = [];
-        const spawnedPositions = new Map(); // Track spawned cube positions with timestamps
-        const collisionCooldowns = new Map(); // Track cooldowns for collisions
-        const collisionCounts = new Map(); // Track collision occurrences
-        const maturationTimers = new Map(); // Track the maturation time for each cube
+        const planes = []; // Renamed from cubes to planes
+        const explosionPlanes = []; // Renamed for consistency
+        const spawnedPositions = new Map();
+        const collisionCooldowns = new Map();
+        const collisionCounts = new Map();
+        const maturationTimers = new Map();
         const COLLISION_THRESHOLD = 100;
         const CULL_RADIUS = 5;
-        const MATURATION_TIME = 1000; // 1 second maturation time before allowing cube collision spawns
-        const MAX_COLLISIONS = 10; // Max number of collisions before culling a cube
-        const NEARBY_RADIUS = 10; // Radius for checking nearby cubes
+        const MATURATION_TIME = 1000;
+        const MAX_COLLISIONS = 10;
+        const NEARBY_RADIUS = 10;
 
-        // Function to generate a random color
+        // Animation control
+        let animationFrameId = null;
+
+        // Generate a random color
         function getRandomColor() {
             return Math.random() * 0xffffff;
         }
-		
-        function getRandomLerpFactor() {
-            return Math.random(); // (Math.random() * (max - min) + min)
-        }
-		
-        // Function to blend two colors
+
+        // Blend two colors
         function blendColors(colorA, colorB) {
             const cA = new THREE.Color(colorA);
             const cB = new THREE.Color(colorB);
-            const randomValue = Math.random() * 100;  // Random value between 0 and 100
-
-            if (randomValue > 60) {
-                // 25% chance to return color A
-                return cA.getHex();
-            } else if (randomValue < 40) {
-                // 25% chance to return color B
-                return cB.getHex();
-            } else {
-                // Between 25% and 75%, blend the colors
-                const newrandomcolor = getRandomColor();
-                return newrandomcolor;
-            }
+            const randomValue = Math.random() * 100;
+            if (randomValue > 60) return cA.getHex();
+            else if (randomValue < 40) return cB.getHex();
+            else return getRandomColor();
         }
 
-        // Function to spawn a cube at a given position with a given color
-        function spawnCubeAtPosition(position, color) {
+        // Spawn a plane (formerly cube)
+        function spawnPlaneAtPosition(position, color) {
             const posKey = `${position.x.toFixed(1)},${position.z.toFixed(1)}`;
             const currentTime = Date.now();
-            if (spawnedPositions.has(posKey)) {
-                if (currentTime - spawnedPositions.get(posKey) < 1000) return; // 1-second cooldown
-            }
+            if (spawnedPositions.has(posKey) && currentTime - spawnedPositions.get(posKey) < 1000) return;
 
-            const cubeGeometry = new THREE.BoxGeometry(1, 1, 1);
-            const cubeMaterial = new THREE.MeshBasicMaterial({ color: color });
-            const cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
+            const planeGeometry = new THREE.PlaneGeometry(1, 1); // Matches original cube size
+            const planeMaterial = new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide });
+            const plane = new THREE.Mesh(planeGeometry, planeMaterial);
 
-            cube.position.set(position.x, 0.5, position.z);
-            cube.userData.velocity = new THREE.Vector3(
+            plane.position.set(position.x, 0.1, position.z); // Slightly above background plane
+            plane.rotation.x = -Math.PI / 2; // Lay flat like the background plane
+            plane.userData.velocity = new THREE.Vector3(
                 (Math.random() - 0.5) * 0.2,
                 0,
                 (Math.random() - 0.5) * 0.2
             );
+            plane.userData.collisionCount = 0;
+            plane.userData.geometry = planeGeometry;
+            plane.userData.material = planeMaterial;
 
-            // Initialize collision counter for the cube
-            cube.userData.collisionCount = 0;
-
-            scene.add(cube);
-            cubes.push(cube);
+            scene.add(plane);
+            planes.push(plane);
             spawnedPositions.set(posKey, currentTime);
-            maturationTimers.set(cube.uuid, currentTime); // Set the maturation time when the cube spawns
+            maturationTimers.set(plane.uuid, currentTime);
         }
 
-        // Function to remove cubes in a given radius from a position
-        function cullCubes(position, radius) {
-            for (let i = cubes.length - 1; i >= 0; i--) {
-                if (cubes[i].position.distanceTo(position) < radius) {
-                    scene.remove(cubes[i]);
-                    cubes.splice(i, 1);
-                }
+        // Spawn explosion planes
+        function explodePlane(position, color) {
+            const numPlanes = Math.floor(Math.random() * 11) + 15;
+            for (let i = 0; i < numPlanes; i++) {
+                const expGeometry = new THREE.PlaneGeometry(0.75, 0.75);
+                const expMaterial = new THREE.MeshBasicMaterial({ color: color, side: THREE.DoubleSide });
+                const expPlane = new THREE.Mesh(expGeometry, expMaterial);
+
+                expPlane.position.copy(position);
+                expPlane.userData.velocity = new THREE.Vector3(
+                    (Math.random() - 0.5) * 0.5,
+                    Math.random() * 0.3,
+                    (Math.random() - 0.5) * 0.5
+                );
+                expPlane.userData.lifespan = Math.random() * 3 + 2;
+                expPlane.userData.initialLifespan = expPlane.userData.lifespan;
+                expPlane.userData.geometry = expGeometry;
+                expPlane.userData.material = expMaterial;
+
+                expPlane.rotation.set(
+                    Math.random() * Math.PI * 2,
+                    Math.random() * Math.PI * 2,
+                    Math.random() * Math.PI * 2
+                );
+
+                scene.add(expPlane);
+                explosionPlanes.push(expPlane);
             }
         }
 
-        // Function to spawn a cube at the clicked location
-        function spawnCube(intersect) {
-            spawnCubeAtPosition(intersect.point, getRandomColor());
+        // Dispose of Three.js object resources
+        function disposeObject(obj) {
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) obj.material.dispose();
+            scene.remove(obj);
         }
 
-        // Event listener for mouse clicks
-        window.addEventListener("click", (event) => {
+        // Remove a plane with cleanup
+        function removePlane(plane) {
+            const index = planes.indexOf(plane);
+            if (index !== -1) {
+                const position = plane.position.clone();
+                const color = plane.material.color.getHex();
+                disposeObject(plane);
+                planes.splice(index, 1);
+                maturationTimers.delete(plane.uuid);
+                for (let key of collisionCooldowns.keys()) {
+                    if (key.includes(plane.uuid)) collisionCooldowns.delete(key);
+                }
+                explodePlane(position, color);
+            }
+        }
+
+        // Cull planes within a radius
+        function cullPlanes(position, radius) {
+            for (let i = planes.length - 1; i >= 0; i--) {
+                const plane = planes[i];
+                if (plane.position.distanceTo(position) < radius) {
+                    removePlane(plane);
+                }
+            }
+            const posKey = position.toArray().join(',');
+            collisionCounts.delete(posKey);
+        }
+
+        // Spawn a plane on click
+        function spawnPlane(intersect) {
+            spawnPlaneAtPosition(intersect.point, getRandomColor());
+        }
+
+        // Mouse click event
+        const onClick = (event) => {
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-
             raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObject(plane);
+            const intersects = raycaster.intersectObject(backgroundPlane);
+            if (intersects.length > 0) spawnPlane(intersects[0]);
+        };
+        window.addEventListener("click", onClick);
 
-            if (intersects.length > 0) {
-                spawnCube(intersects[0]);
-            }
-        });
-
-        // Helper function to track collisions between cubes
-        function trackCollision(cubeA, cubeB) {
-            const distance = cubeA.position.distanceTo(cubeB.position);
+        // Track collisions
+        function trackCollision(planeA, planeB) {
+            const distance = planeA.position.distanceTo(planeB.position);
             if (distance < 1) {
                 const currentTime = Date.now();
-                const collisionKey = `${cubeA.uuid},${cubeB.uuid}`;
-
+                const collisionKey = `${planeA.uuid},${planeB.uuid}`;
                 if (collisionCooldowns.has(collisionKey) && currentTime - collisionCooldowns.get(collisionKey) < 1500) return;
 
-                // Ensure both cubes are matured before triggering a collision spawn
-                if (currentTime - maturationTimers.get(cubeA.uuid) < MATURATION_TIME || currentTime - maturationTimers.get(cubeB.uuid) < MATURATION_TIME) {
-                    return; // Prevent spawning new cubes from immature cubes
-                }
+                if (currentTime - maturationTimers.get(planeA.uuid) < MATURATION_TIME || 
+                    currentTime - maturationTimers.get(planeB.uuid) < MATURATION_TIME) return;
 
-                // Check for nearby cubes within the radius
-                let nearbyCubesCount = 0;
-                for (let i = 0; i < cubes.length; i++) {
-                    const otherCube = cubes[i];
-                    if (otherCube !== cubeA && otherCube !== cubeB && otherCube.position.distanceTo(cubeA.position) < NEARBY_RADIUS) {
-                        nearbyCubesCount++;
+                let nearbyPlanesCount = 0;
+                for (let i = 0; i < planes.length; i++) {
+                    if (planes[i] !== planeA && planes[i] !== planeB && 
+                        planes[i].position.distanceTo(planeA.position) < NEARBY_RADIUS) {
+                        nearbyPlanesCount++;
                     }
                 }
 
-                // If more than 1 other cubes exist within the radius, set max_collisions to 0
-                if (nearbyCubesCount > 1) {
-                    cubeA.userData.collisionCount = 10;
-                    cubeB.userData.collisionCount = 10;
+                if (nearbyPlanesCount > 1) {
+                    planeA.userData.collisionCount = MAX_COLLISIONS;
+                    planeB.userData.collisionCount = MAX_COLLISIONS;
                 }
 
-                // Collision and response logic
-                const collisionPoint = new THREE.Vector3().addVectors(cubeA.position, cubeB.position).multiplyScalar(0.5);
-                const newColor = blendColors(cubeA.material.color.getHex(), cubeB.material.color.getHex());
+                const collisionPoint = new THREE.Vector3().addVectors(planeA.position, planeB.position).multiplyScalar(0.5);
+                const newColor = blendColors(planeA.material.color.getHex(), planeB.material.color.getHex());
 
-                // Increase the collision count for both cubes
-                cubeA.userData.collisionCount++;
-                cubeB.userData.collisionCount++;
+                planeA.userData.collisionCount++;
+                planeB.userData.collisionCount++;
 
-                // Cull the cubes after reaching the max collision count
-                if (cubeA.userData.collisionCount >= MAX_COLLISIONS) {
-                    scene.remove(cubeA);
-                    cubes.splice(cubes.indexOf(cubeA), 1);
-                }
-                if (cubeB.userData.collisionCount >= MAX_COLLISIONS) {
-                    scene.remove(cubeB);
-                    cubes.splice(cubes.indexOf(cubeB), 1);
+                if (planeA.userData.collisionCount >= MAX_COLLISIONS) removePlane(planeA);
+                if (planeB.userData.collisionCount >= MAX_COLLISIONS) removePlane(planeB);
+
+                const posKey = collisionPoint.toArray().join(',');
+                collisionCounts.set(posKey, (collisionCounts.get(posKey) || 0) + 1);
+                if (collisionCounts.get(posKey) >= COLLISION_THRESHOLD) {
+                    cullPlanes(collisionPoint, CULL_RADIUS);
                 }
 
-                collisionCounts.set(collisionPoint.toArray().join(','), (collisionCounts.get(collisionPoint.toArray().join(',')) || 0) + 1);
-
-                if (collisionCounts.get(collisionPoint.toArray().join(',')) >= COLLISION_THRESHOLD) {
-                    cullCubes(collisionPoint, CULL_RADIUS);
-                    collisionCounts.set(collisionPoint.toArray().join(','), 0);  // Reset after culling
-                }
-
-                // Spawn blended color cube
-                spawnCubeAtPosition(collisionPoint, newColor);
-
-                swapVelocities(cubeA, cubeB);  // Swap velocities
-
+                spawnPlaneAtPosition(collisionPoint, newColor);
+                swapVelocities(planeA, planeB);
                 collisionCooldowns.set(collisionKey, currentTime);
             }
         }
 
-        // Helper function to swap velocities between two cubes
-        function swapVelocities(cubeA, cubeB) {
-            const tempVelocity = cubeA.userData.velocity.clone();
-            cubeA.userData.velocity.copy(cubeB.userData.velocity);
-            cubeB.userData.velocity.copy(tempVelocity);
+        // Swap velocities
+        function swapVelocities(planeA, planeB) {
+            const tempVelocity = planeA.userData.velocity.clone();
+            planeA.userData.velocity.copy(planeB.userData.velocity);
+            planeB.userData.velocity.copy(tempVelocity);
         }
 
-        // Check for cube collisions using the new trackCollision function
+        // Check collisions
         function checkCollisions() {
+            for (let i = 0; i < planes.length; i++) {
+                for (let j = i + 1; j < planes.length; j++) {
+                    trackCollision(planes[i], planes[j]);
+                }
+            }
+        }
+
+        // Update explosion planes
+        function updateExplosionPlanes(delta) {
             const currentTime = Date.now();
-            for (let i = 0; i < cubes.length; i++) {
-                for (let j = i + 1; j < cubes.length; j++) {
-                    const cubeA = cubes[i];
-                    const cubeB = cubes[j];
-                    trackCollision(cubeA, cubeB);  // Track collision between cubes
+            for (let i = explosionPlanes.length - 1; i >= 0; i--) {
+                const expPlane = explosionPlanes[i];
+                expPlane.position.add(expPlane.userData.velocity);
+                expPlane.userData.lifespan -= delta;
+
+                const scale = (expPlane.userData.lifespan / expPlane.userData.initialLifespan) * 0.75;
+                expPlane.scale.set(scale, scale, 1);
+
+                if (expPlane.userData.lifespan <= 0) {
+                    disposeObject(expPlane);
+                    explosionPlanes.splice(i, 1);
                 }
+            }
+
+            for (let [key, time] of spawnedPositions) {
+                if (currentTime - time > 1000) spawnedPositions.delete(key);
             }
         }
 
-        // Update cube positions with bounds
-        function updateCubes() {
-            cubes.forEach(cube => {
-                cube.position.add(cube.userData.velocity);
+        // Update planes with dynamic boundaries
+        function updatePlanes(delta) {
+            const halfWidth = planeSize.width / 2 - 0.5; // Adjust for plane size
+            const halfHeight = planeSize.height / 2 - 0.5;
 
-                // Boundary checks
-                if (cube.position.x > 49.5 || cube.position.x < -49.5) {
-                    cube.userData.velocity.x *= -1;
-                }
-                if (cube.position.z > 49.5 || cube.position.z < -49.5) {
-                    cube.userData.velocity.z *= -1;
-                }
+            planes.forEach(plane => {
+                plane.position.add(plane.userData.velocity);
+                if (plane.position.x > halfWidth || plane.position.x < -halfWidth) plane.userData.velocity.x *= -1;
+                if (plane.position.z > halfHeight || plane.position.z < -halfHeight) plane.userData.velocity.z *= -1;
             });
-
             checkCollisions();
+            updateExplosionPlanes(delta);
         }
 
-        // Function to start and spawn 25 random cubes
+        // Spawn initial planes dynamically
         function start() {
-            for (let i = 0; i < 25; i++) {
-                const x = (Math.random() - 0.5) * 100;  // Random position within the plane
-                const z = (Math.random() - 0.5) * 100;
-                spawnCubeAtPosition(new THREE.Vector3(x, 0, z), getRandomColor());
+            const halfWidth = planeSize.width / 2;
+            const halfHeight = planeSize.height / 2;
+            for (let i = 0; i < 100; i++) {
+                const x = (Math.random() - 0.5) * planeSize.width;
+                const z = (Math.random() - 0.5) * planeSize.height;
+                spawnPlaneAtPosition(new THREE.Vector3(x, 0, z), getRandomColor());
             }
         }
 
-        // Render loop
+        // Animation loop
+        let lastTime = performance.now();
         function animate() {
-            requestAnimationFrame(animate);
-            updateCubes();
+            animationFrameId = requestAnimationFrame(animate);
+            const currentTime = performance.now();
+            const delta = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+
+            updatePlanes(delta);
             renderer.render(scene, camera);
         }
         animate();
 
         // Handle window resize
-        window.addEventListener("resize", () => {
+        const onResize = () => {
             renderer.setSize(window.innerWidth, window.innerHeight);
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
-        });
 
-        // Call the start function to spawn 25 cubes
+            // Update plane size
+            planeSize = calculatePlaneSize();
+            backgroundPlane.geometry.dispose();
+            backgroundPlane.geometry = new THREE.PlaneGeometry(planeSize.width, planeSize.height);
+        };
+        window.addEventListener("resize", onResize);
+
+        // Cleanup function
+        function cleanup() {
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            window.removeEventListener("click", onClick);
+            window.removeEventListener("resize", onResize);
+            planes.forEach(plane => disposeObject(plane));
+            planes.length = 0;
+            explosionPlanes.forEach(plane => disposeObject(plane));
+            explosionPlanes.length = 0;
+            disposeObject(backgroundPlane);
+            spawnedPositions.clear();
+            collisionCooldowns.clear();
+            collisionCounts.clear();
+            maturationTimers.clear();
+            renderer.dispose();
+            document.body.removeChild(renderer.domElement);
+        }
+
+        // Cleanup on window unload
+        window.addEventListener("beforeunload", cleanup);
+
+        // Start the simulation
         start();
     </script>
 </body>
